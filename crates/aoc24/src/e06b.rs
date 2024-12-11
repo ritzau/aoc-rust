@@ -3,6 +3,8 @@ use crate::input::InputFetcher;
 use crate::s24::YEAR;
 use crate::{head, Day, PuzzleResult};
 use fxhash::FxHashSet;
+use itertools::Itertools;
+use rayon::prelude::*;
 
 const DAY: Day = Day(6);
 
@@ -14,14 +16,41 @@ pub fn solve(aoc: &AocCache) -> PuzzleResult<()> {
     println!("Part 1: {}", p1);
     assert_eq!(p1, 4665);
 
-    // let p2 = part2(&input.read_to_string()?)?;
-    // println!("Part 2: {}", p2);
+    let p2 = part2(&input.read_to_string()?)?;
+    println!("Part 2: {}", p2);
     // assert_eq!(p2, 1688);
 
     Ok(())
 }
 
 fn part1(input: &str) -> PuzzleResult<usize> {
+    let (grid, start_pos) = parse(input);
+    let (_, steps) = simulate_robot(&grid, start_pos, Direction::North);
+    let path = robot_path(&steps);
+    Ok(path.iter().unique().count())
+}
+
+fn part2(input: &str) -> PuzzleResult<usize> {
+    let (grid, start_pos) = parse(input);
+    let (_, steps) = simulate_robot(&grid, start_pos, Direction::North);
+    let path = robot_path(&steps);
+
+    let ps: FxHashSet<_> = (1..path.len())
+        .into_par_iter()
+        .filter(|&l| {
+            let mut grid = grid.clone();
+            grid.add_obstacle(path[l].0, path[l].1);
+            grid.sort();
+            let (result, _) = simulate_robot(&grid, start_pos, Direction::North);
+            result == RobotResult::LoopDetected
+        })
+        .map(|l| path[l])
+        .collect();
+
+    Ok(ps.len())
+}
+
+fn parse(input: &str) -> (Grid, (usize, usize)) {
     let max_size = input.lines().count();
     let mut grid = Grid::new(max_size);
 
@@ -47,19 +76,7 @@ fn part1(input: &str) -> PuzzleResult<usize> {
         })
         .unwrap();
 
-    // println!("{:?}", start_pos);
-
-    let r = simulate_robot(&grid, start_pos, Direction::North);
-    // println!("{:?}", r);
-
-    let unique = unique_positions(&r.1);
-    // println!("{:?}", unique);
-
-    Ok(unique)
-}
-
-fn part2(_input: &str) -> PuzzleResult<usize> {
-    Ok(6)
+    (grid, start_pos)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,6 +115,11 @@ impl Grid {
     fn add_obstacle(&mut self, row: usize, col: usize) {
         self.rows[row].push(col);
         self.cols[col].push(row);
+    }
+
+    fn sort(&mut self) {
+        self.rows.iter_mut().for_each(|r| r.sort_unstable());
+        self.cols.iter_mut().for_each(|c| c.sort_unstable());
     }
 
     // Find the nearest previous obstacle in a sorted vector
@@ -176,8 +198,8 @@ fn simulate_robot(
     }
 }
 
-fn unique_positions(path: &[(usize, usize)]) -> usize {
-    let mut covered_positions: FxHashSet<(usize, usize)> = FxHashSet::default();
+fn robot_path(path: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut covered_positions = Vec::new();
 
     for window in path.windows(2) {
         if let [start, end] = window {
@@ -190,7 +212,7 @@ fn unique_positions(path: &[(usize, usize)]) -> usize {
                     end.1..=start.1
                 };
                 for col in range {
-                    covered_positions.insert((row, col));
+                    covered_positions.push((row, col));
                 }
             } else if start.1 == end.1 {
                 // Vertical movement
@@ -201,13 +223,13 @@ fn unique_positions(path: &[(usize, usize)]) -> usize {
                     end.0..=start.0
                 };
                 for row in range {
-                    covered_positions.insert((row, col));
+                    covered_positions.push((row, col));
                 }
             }
         }
     }
 
-    covered_positions.len()
+    covered_positions
 }
 
 #[cfg(test)]
