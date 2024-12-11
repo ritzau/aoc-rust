@@ -7,6 +7,7 @@ mod e03;
 mod e04;
 mod e05;
 mod e06;
+mod e06b;
 mod e07;
 mod e08;
 mod e09;
@@ -32,6 +33,7 @@ pub fn solve() -> PuzzleResult<()> {
         e04::solve,
         e05::solve,
         e06::solve,
+        e06b::solve,
         e07::solve,
         e08::solve,
         e09::solve,
