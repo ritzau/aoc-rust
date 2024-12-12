@@ -5,6 +5,7 @@ use crate::{head, Day, PuzzleResult};
 use fxhash::FxHashSet;
 use itertools::Itertools;
 use rayon::prelude::*;
+use std::cmp::max;
 
 const DAY: Day = Day(6);
 
@@ -18,36 +19,17 @@ pub fn solve(aoc: &AocCache) -> PuzzleResult<()> {
 
     let p2 = part2(&input.read_to_string()?)?;
     println!("Part 2: {}", p2);
-    // assert_eq!(p2, 1688);
+    assert_eq!(p2, 1688);
 
     Ok(())
 }
 
-fn part1(input: &str) -> PuzzleResult<usize> {
-    let (grid, start_pos) = parse(input);
-    let (_, steps) = simulate_robot(&grid, start_pos, Direction::North);
-    let path = robot_path(&steps);
-    Ok(path.iter().unique().count())
+fn part1(_input: &str) -> PuzzleResult<usize> {
+    Ok(0)
 }
 
-fn part2(input: &str) -> PuzzleResult<usize> {
-    let (grid, start_pos) = parse(input);
-    let (_, steps) = simulate_robot(&grid, start_pos, Direction::North);
-    let path = robot_path(&steps);
-
-    let ps: FxHashSet<_> = (1..path.len())
-        .into_par_iter()
-        .filter(|&l| {
-            let mut grid = grid.clone();
-            grid.add_obstacle(path[l].0, path[l].1);
-            grid.sort();
-            let (result, _) = simulate_robot(&grid, start_pos, Direction::North);
-            result == RobotResult::LoopDetected
-        })
-        .map(|l| path[l])
-        .collect();
-
-    Ok(ps.len())
+fn part2(_input: &str) -> PuzzleResult<usize> {
+    Ok(0)
 }
 
 fn parse(input: &str) -> (Grid, (usize, usize)) {
@@ -100,8 +82,10 @@ impl Direction {
 
 #[derive(Clone, Debug)]
 struct Grid {
-    rows: Vec<Vec<usize>>,
-    cols: Vec<Vec<usize>>,
+    rows: Vec<Vec<usize>>, // Obstacle positions for each row
+    cols: Vec<Vec<usize>>, // Obstacle positions for each column
+    max_size: usize,       // Grid size
+    next_obstacles: Vec<Vec<(usize, usize, usize, usize)>>, // Indices for (North, South, West, East)
 }
 
 impl Grid {
@@ -109,6 +93,11 @@ impl Grid {
         Grid {
             rows: vec![Vec::new(); max_size],
             cols: vec![Vec::new(); max_size],
+            max_size,
+            next_obstacles: vec![
+                vec![(usize::MAX, usize::MAX, usize::MAX, usize::MAX); max_size];
+                max_size
+            ],
         }
     }
 
@@ -117,39 +106,52 @@ impl Grid {
         self.cols[col].push(row);
     }
 
-    fn sort(&mut self) {
-        self.rows.iter_mut().for_each(|r| r.sort_unstable());
-        self.cols.iter_mut().for_each(|c| c.sort_unstable());
+    fn generate_next_obstacles(&mut self) {
+        let obstacles: Vec<(usize, usize)> = vec![(1, 2), (3, 0), (0, 3), (2, 1)];
+        let max_r = obstacles.iter().map(|(r, _)| r).max().unwrap();
+        let max_c = obstacles.iter().map(|(_, c)| c).max().unwrap();
+        let max_size = max(*max_r, *max_c);
+        let mut rows = vec![Vec::<usize>::new(); max_size];
+        let mut cols = vec![Vec::<usize>::new(); max_size];
+        obstacles.iter().copied().for_each(|(r, c)| {
+            rows[r].push(c);
+            cols[c].push(r);
+        });
+        rows.iter_mut().for_each(|r| r.sort_unstable());
+        cols.iter_mut().for_each(|c| c.sort_unstable());
+
+        let mut grid = [[(0usize, 0usize); 10]; 10];
+        for (row, col) in obstacles.iter().copied() {
+            if row > 0 {
+                // Hit from north, turning west
+                let col_next = rows[row - 1]
+                    .iter()
+                    .copied()
+                    .filter(|&other| other < col)
+                    .last()
+                    .unwrap_or(usize::MAX);
+                grid[row][col] = (row, col_next);
+            }
+        }
     }
 
-    // Find the nearest previous obstacle in a sorted vector
-    fn find_prev(obstacles: &[usize], pos: usize) -> Option<isize> {
-        obstacles
-            .iter()
-            .rev()
-            .find(|&&x| x < pos)
-            .map(|&x| (x + 1) as isize)
-    }
+    fn print_with_path(&self, path: &[(usize, usize)]) {
+        let mut grid = vec![vec!['.'; self.max_size]; self.max_size];
 
-    // Find the nearest next obstacle in a sorted vector
-    fn find_next(obstacles: &[usize], pos: usize) -> Option<isize> {
-        // println!("pos {pos} of obstacles: {:?}", obstacles);
-        obstacles
-            .iter()
-            .find(|&&x| x > pos)
-            .map(|&x| (x - 1) as isize)
-    }
+        for row in 0..self.max_size {
+            for &col in &self.rows[row] {
+                grid[row][col] = '#';
+            }
+        }
 
-    // Get the next position based on direction
-    fn next_position(&self, pos: (usize, usize), direction: Direction) -> isize {
-        let (row, col) = pos;
+        for &(row, col) in path {
+            if grid[row][col] == '.' {
+                grid[row][col] = '*';
+            }
+        }
 
-        // println!("pos: {:?}, direction: {:?}", pos, direction);
-        match direction {
-            Direction::North => Self::find_prev(&self.cols[col], row).unwrap_or(-1),
-            Direction::South => Self::find_next(&self.cols[col], row).unwrap_or(-1),
-            Direction::West => Self::find_prev(&self.rows[row], col).unwrap_or(-1),
-            Direction::East => Self::find_next(&self.rows[row], col).unwrap_or(-1),
+        for row in grid {
+            println!("{}", row.iter().collect::<String>());
         }
     }
 }
@@ -158,44 +160,6 @@ impl Grid {
 enum RobotResult {
     OutOfBounds,
     LoopDetected,
-}
-
-fn simulate_robot(
-    grid: &Grid,
-    start_position: (usize, usize),
-    start_direction: Direction,
-) -> (RobotResult, Vec<(usize, usize)>) {
-    let mut position = start_position;
-    let mut direction = start_direction;
-    let mut visited_states: FxHashSet<((usize, usize), Direction)> = FxHashSet::default();
-    let mut path = Vec::new();
-
-    loop {
-        path.push(position);
-
-        if !visited_states.insert((position, direction)) {
-            return (RobotResult::LoopDetected, path);
-        }
-
-        let next = grid.next_position(position, direction);
-        if next == -1 {
-            match direction {
-                Direction::North => position.0 = 0,
-                Direction::South => position.0 = grid.rows.len() - 1,
-                Direction::West => position.1 = 0,
-                Direction::East => position.1 = grid.cols.len() - 1,
-            }
-            path.push(position);
-            return (RobotResult::OutOfBounds, path);
-        } else {
-            match direction {
-                Direction::North | Direction::South => position.0 = next as usize,
-                Direction::West | Direction::East => position.1 = next as usize,
-            }
-        }
-
-        direction = direction.turn_right();
-    }
 }
 
 fn robot_path(path: &[(usize, usize)]) -> Vec<(usize, usize)> {
@@ -232,6 +196,179 @@ fn robot_path(path: &[(usize, usize)]) -> Vec<(usize, usize)> {
     covered_positions
 }
 
+type GridZ<const N: usize> = [[(usize, usize); N]; N];
+
+#[derive(Debug, Clone)]
+struct Map<const N: usize> {
+    grid: GridZ<N>,
+    max_size: usize,
+    start: (usize, usize),
+}
+
+impl<const N: usize> Map<N> {
+    fn parse(input: &str) -> Self {
+        let max_size = input.lines().count();
+        let obstacles: Vec<_> = input
+            .lines()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                line.chars()
+                    .enumerate()
+                    .filter(|&(_, ch)| ch == '#')
+                    .map(move |(col, _)| (row, col))
+            })
+            .collect();
+
+        let start = input
+            .lines()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                line.chars()
+                    .enumerate()
+                    .find(|&(_, ch)| ch == '^')
+                    .map(move |(col, _)| (row, col))
+            })
+            .exactly_one()
+            .unwrap();
+
+        let mut rows = vec![Vec::<usize>::new(); N];
+        let mut cols = vec![Vec::<usize>::new(); N];
+        obstacles.iter().copied().for_each(|(r, c)| {
+            rows[r].push(c);
+            cols[c].push(r);
+        });
+        rows.iter_mut().for_each(|r| r.sort_unstable());
+        cols.iter_mut().for_each(|c| c.sort_unstable());
+
+        fn next_smaller(obstacles: &[usize], value: usize) -> usize {
+            obstacles
+                .iter()
+                .copied()
+                .filter(|&other| other < value)
+                .last()
+                .map(|other| other + 1)
+                .unwrap_or(usize::MAX)
+        }
+
+        fn next_larger(obstacles: &[usize], value: usize) -> usize {
+            obstacles
+                .iter()
+                .copied()
+                .find(|&other| other > value)
+                .map(|other| other - 1)
+                .unwrap_or(usize::MAX)
+        }
+
+        // FIXME: Handle double and triple turns
+        // FIXME: Handle adding obstacles
+        let mut grid = [[(0usize, 0usize); N]; N];
+        for (row, col) in obstacles.iter().copied() {
+            grid[row][col] = (usize::MAX, usize::MAX);
+            if row > 0 {
+                // Hit from north, turning west
+                let col_next = next_smaller(&rows[row - 1], col);
+                if col_next != col {
+                    grid[row - 1][col] = (row - 1, col_next);
+                }
+            }
+            if row < max_size - 1 {
+                // Hit from south, turning east
+                let col_next = next_larger(&rows[row + 1], col);
+                if col_next != col {
+                    grid[row + 1][col] = (row + 1, col_next);
+                }
+            }
+            if col > 0 {
+                // Hit from west, turning south
+                let row_next = next_larger(&cols[col - 1], row);
+                if row_next != row {
+                    grid[row][col - 1] = (row_next, col - 1);
+                }
+            }
+            if col < max_size - 1 {
+                // Hit from east, turning north
+                let row_next = next_smaller(&cols[col + 1], row);
+                if row_next != row {
+                    grid[row][col + 1] = (row_next, col + 1);
+                }
+            }
+        }
+
+        let start_jump = next_smaller(&cols[start.1], start.0);
+        grid[start.0][start.1] = (start_jump, start.1);
+
+        Self {
+            grid,
+            max_size,
+            start,
+        }
+    }
+
+    fn simulate(&self) -> (RobotResult, Vec<(usize, usize)>) {
+        let mut position = self.start;
+        let mut direction = Direction::North;
+        let mut visited_states: FxHashSet<(usize, usize, Direction)> = FxHashSet::default();
+        let mut path = Vec::new();
+
+        loop {
+            path.push(position);
+
+            if !visited_states.insert((position.0, position.1, direction)) {
+                return (RobotResult::LoopDetected, path);
+            }
+
+            let (next_row, next_col) = self.grid[position.0][position.1];
+            if next_row == usize::MAX || next_col == usize::MAX {
+                // FIXME: Can't handle when we go out of bounds after double/triple turns
+                // Add the last position before going out of bounds
+                position = match direction {
+                    Direction::North => (0, position.1),
+                    Direction::South => (self.max_size - 1, position.1),
+                    Direction::West => (position.0, 0),
+                    Direction::East => (position.0, self.max_size - 1),
+                };
+                path.push(position);
+                return (RobotResult::OutOfBounds, path);
+            }
+
+            if position.0 < next_row {
+                direction = Direction::South;
+            } else if position.0 > next_row {
+                direction = Direction::North;
+            } else if position.1 < next_col {
+                direction = Direction::East;
+            } else if position.1 > next_col {
+                direction = Direction::West;
+            } else {
+                panic!(
+                    "Invalid position {:?} -> {:?}",
+                    position,
+                    (next_row, next_col)
+                );
+            }
+
+            position = (next_row, next_col);
+        }
+    }
+
+    fn print(&self) {
+        for row in self.grid.iter().take(self.max_size) {
+            for (r, c) in row.iter().take(self.max_size).copied() {
+                if r == usize::MAX && c == usize::MAX {
+                    print!("(###) ");
+                } else if r == 0 && c == 0 {
+                    print!("(   ) ");
+                } else {
+                    let r = if r == usize::MAX { "X" } else { &r.to_string() };
+                    let c = if c == usize::MAX { "X" } else { &c.to_string() };
+                    print!("({},{}) ", r, c);
+                }
+            }
+            println!();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +385,30 @@ mod tests {
 #.........
 ......#...
 ";
+
+    const SAMPLE_2: &str = "\
+....#.....
+.....#...#
+..........
+..#.......
+.......#..
+..........
+.#..^.....
+........#.
+#.........
+......#...
+";
+
+    #[test]
+    fn test_build_graph() {
+        let map = Map::<16>::parse(SAMPLE_2);
+        map.print();
+        let (result, path) = map.simulate();
+        println!("{:?} {:?}", result, path);
+        let steps = robot_path(&path);
+        println!("{:?}", steps);
+        println!("{:?}", steps.iter().unique().count());
+    }
 
     #[test]
     fn test_part1() {
